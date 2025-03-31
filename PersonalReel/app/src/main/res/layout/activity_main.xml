@@ -5,56 +5,26 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-    <!-- ExoPlayer's PlayerView with no controller and video stretched to fill the screen -->
+    <!-- ExoPlayer's PlayerView with no controller; video is scaled in "zoom" mode
+         which fills the screen while maintaining aspect ratio (cropping if necessary) -->
     <com.google.android.exoplayer2.ui.PlayerView
         android:id="@+id/playerView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         app:use_controller="false"
-        app:resize_mode="fill"
+        app:resize_mode="zoom"
         android:layout_gravity="center" />
 
-    <!-- Top overlay: Video name -->
+    <!-- Bottom overlay for video and app info; left aligned and allows multiple lines -->
     <TextView
-        android:id="@+id/tvVideoName"
-        android:layout_width="wrap_content"
+        android:id="@+id/tvBottomInfo"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Video Name"
-        android:textSize="10sp"
+        android:padding="8dp"
         android:textColor="#FFFFFF"
-        android:layout_marginTop="8dp"
-        android:layout_gravity="top|center_horizontal" />
-
-    <!-- Top overlay: Video number (below video name) -->
-    <TextView
-        android:id="@+id/tvVideoNumber"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="#1 of 1"
         android:textSize="10sp"
-        android:textColor="#FFFFFF"
-        android:layout_marginTop="24dp"
-        android:layout_gravity="top|center_horizontal" />
-
-    <!-- Bottom overlay: Date and time -->
-    <TextView
-        android:id="@+id/tvDateTime"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Mon, Jan 1, 2025 00:00:00"
-        android:textSize="10sp"
-        android:textColor="#FFFFFF"
-        android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginBottom="30dp" />
-
-    <!-- Bottom overlay: Credits -->
-    <TextView
-        android:id="@+id/tvCredits"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="PersonalReel by Arnav Mukhopadhyay (EMAIL: gudduarnav@gmail.com)"
-        android:textSize="10sp"
-        android:textColor="#FFFFFF"
-        android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginBottom="8dp" />
+        android:gravity="start"
+        android:layout_gravity="bottom|start"
+        android:singleLine="false"
+        android:ellipsize="none" />
 </FrameLayout>

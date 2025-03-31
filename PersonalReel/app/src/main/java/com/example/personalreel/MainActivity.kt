@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -16,6 +17,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.documentfile.provider.DocumentFile
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
+import com.google.android.exoplayer2.PlaybackException
 import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.ui.PlayerView
 import kotlin.math.abs
@@ -26,13 +28,11 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var playerView: PlayerView
     private lateinit var exoPlayer: ExoPlayer
-    private lateinit var tvVideoName: TextView
-    private lateinit var tvVideoNumber: TextView
-    private lateinit var tvDateTime: TextView
+    private lateinit var tvBottomInfo: TextView
 
-    // List to hold discovered video URIs from the selected folder.
+    // List of video URIs loaded from the selected folder.
     private val videoUris: MutableList<Uri> = mutableListOf()
-    // List of indices representing the random playback order for the cycle.
+    // Random playback order for the current cycle (list of indices into videoUris).
     private var randomOrder: MutableList<Int> = mutableListOf()
     // Pointer into the current random order cycle.
     private var currentIndex = 0
@@ -42,48 +42,58 @@ class MainActivity : AppCompatActivity() {
         private const val SWIPE_THRESHOLD = 100f // in pixels
         private const val PREFS_NAME = "app_prefs"
         private const val KEY_FOLDER_URI = "folderUri"
+        private const val KEY_LAST_VIDEO_URI = "lastVideoUri"
     }
 
     private var startY = 0f
+    private var appStartTime: Long = 0L
 
-    // Handler to update the date/time overlay every second.
+    // Handler to update the bottom overlay every minute.
     private val handler = Handler(Looper.getMainLooper())
-    private val updateTimeRunnable = object : Runnable {
+    private val updateInfoRunnable = object : Runnable {
         override fun run() {
-            val sdf = SimpleDateFormat("EEEE, MMM d, yyyy HH:mm:ss", Locale.getDefault())
-            tvDateTime.text = sdf.format(Date())
-            handler.postDelayed(this, 1000)
+            if (videoUris.isNotEmpty() && randomOrder.isNotEmpty()) {
+                updateBottomInfo(videoUris[randomOrder[currentIndex]])
+            }
+            handler.postDelayed(this, 60000)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Force portrait orientation.
+        // Default orientation set to portrait (will be adjusted per video).
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         setContentView(R.layout.activity_main)
         hideSystemUI()
+        appStartTime = System.currentTimeMillis()
 
         playerView = findViewById(R.id.playerView)
-        tvVideoName = findViewById(R.id.tvVideoName)
-        tvVideoNumber = findViewById(R.id.tvVideoNumber)
-        tvDateTime = findViewById(R.id.tvDateTime)
+        tvBottomInfo = findViewById(R.id.tvBottomInfo)
 
-        // Initialize ExoPlayer and attach it to the PlayerView.
+        // Initialize ExoPlayer.
         exoPlayer = ExoPlayer.Builder(this).build()
         playerView.player = exoPlayer
-        // We set repeat mode off since we want to auto-advance manually.
-        exoPlayer.repeatMode = Player.REPEAT_MODE_ALL //Player.REPEAT_MODE_OFF
+        // We handle cycle looping manually.
+        exoPlayer.repeatMode = Player.REPEAT_MODE_OFF
 
-        // Add a listener to detect when a video finishes, then auto advance.
-        /*exoPlayer.addListener(object : Player.Listener {
+        // Listen for video end and errors.
+        exoPlayer.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED) {
                     nextVideo()
                 }
             }
-        })*/
 
-        // Set up manual swipe detection on the PlayerView for vertical swipes.
+            override fun onPlayerError(error: PlaybackException) {
+                // Skip unplayable video.
+                val failedUri = videoUris[randomOrder[currentIndex]]
+                videoUris.remove(failedUri)
+                generateRandomOrder()
+                nextVideo()
+            }
+        })
+
+        // Set up swipe detection (swipe up: next; swipe down: previous).
         playerView.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -93,11 +103,7 @@ class MainActivity : AppCompatActivity() {
                 MotionEvent.ACTION_UP -> {
                     val deltaY = event.y - startY
                     if (abs(deltaY) > SWIPE_THRESHOLD) {
-                        if (deltaY < 0) {
-                            nextVideo()
-                        } else {
-                            previousVideo()
-                        }
+                        if (deltaY < 0) nextVideo() else previousVideo()
                     }
                     true
                 }
@@ -105,11 +111,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Check SharedPreferences for a saved folder URI.
+        // Check for a saved folder URI.
         val sharedPref = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val folderUriString = sharedPref.getString(KEY_FOLDER_URI, null)
         if (folderUriString == null) {
-            // No folder saved: prompt the user.
+            // Prompt user to select folder.
             pickFolder()
         } else {
             val folderUri = Uri.parse(folderUriString)
@@ -117,10 +123,19 @@ class MainActivity : AppCompatActivity() {
             scanFolderForVideos(folderUri)
             if (videoUris.isNotEmpty()) {
                 generateRandomOrder()
+                // Try restoring last played video.
+                val lastVideoUriString = sharedPref.getString(KEY_LAST_VIDEO_URI, null)
                 currentIndex = 0
+                if (lastVideoUriString != null) {
+                    val lastUri = Uri.parse(lastVideoUriString)
+                    val idx = videoUris.indexOf(lastUri)
+                    if (idx != -1) {
+                        val pos = randomOrder.indexOf(idx)
+                        if (pos != -1) currentIndex = pos
+                    }
+                }
                 playVideoAtCurrentCycleIndex()
             } else {
-                // Folder exists but no videos found; ask user to select one.
                 pickFolder()
             }
         }
@@ -128,14 +143,20 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        handler.post(updateTimeRunnable)
+        handler.post(updateInfoRunnable)
         exoPlayer.playWhenReady = true
     }
 
     override fun onPause() {
         super.onPause()
-        handler.removeCallbacks(updateTimeRunnable)
+        handler.removeCallbacks(updateInfoRunnable)
         exoPlayer.playWhenReady = false
+        // Save the currently playing video's URI.
+        if (videoUris.isNotEmpty() && randomOrder.isNotEmpty()) {
+            val currentUri = videoUris[randomOrder[currentIndex]]
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(KEY_LAST_VIDEO_URI, currentUri.toString()).apply()
+        }
     }
 
     override fun onDestroy() {
@@ -143,7 +164,7 @@ class MainActivity : AppCompatActivity() {
         exoPlayer.release()
     }
 
-    // Hide system UI for a full-screen immersive experience.
+    // Hide system UI for full-screen immersive experience.
     private fun hideSystemUI() {
         window.decorView.systemUiVisibility = (
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
@@ -160,7 +181,7 @@ class MainActivity : AppCompatActivity() {
         if (hasFocus) hideSystemUI()
     }
 
-    // Prompt the user to select a folder using ACTION_OPEN_DOCUMENT_TREE.
+    // Prompt the user to select a folder.
     private fun pickFolder() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
         startActivityForResult(intent, REQUEST_FOLDER)
@@ -170,17 +191,12 @@ class MainActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_FOLDER && resultCode == Activity.RESULT_OK) {
             val folderUri = data?.data ?: return
-            // Persist permissions.
             contentResolver.takePersistableUriPermission(
                 folderUri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
-            // Save folder URI in SharedPreferences.
-            val sharedPref = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            with(sharedPref.edit()) {
-                putString(KEY_FOLDER_URI, folderUri.toString())
-                apply()
-            }
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(KEY_FOLDER_URI, folderUri.toString()).apply()
             videoUris.clear()
             scanFolderForVideos(folderUri)
             if (videoUris.isNotEmpty()) {
@@ -192,7 +208,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Recursively scans the selected folder for video files using the Storage Access Framework.
+     * Recursively scans the selected folder for video files.
      */
     private fun scanFolderForVideos(folderUri: Uri) {
         val docId = DocumentsContract.getTreeDocumentId(folderUri)
@@ -220,7 +236,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Generates a new random order (shuffled indices) for the video playback cycle.
+     * Generates a new random order for playback.
      */
     private fun generateRandomOrder() {
         randomOrder = videoUris.indices.toMutableList()
@@ -228,46 +244,88 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Plays the video corresponding to the current index in the random cycle.
+     * Plays the video corresponding to the current index in the random order.
      */
     private fun playVideoAtCurrentCycleIndex() {
         if (videoUris.isNotEmpty() && randomOrder.isNotEmpty()) {
             val uri = videoUris[randomOrder[currentIndex]]
+            adjustOrientation(uri)
             playVideo(uri)
         }
     }
 
     /**
-     * Plays the given video URI using ExoPlayer.
+     * Uses ExoPlayer to play the given video URI.
      */
     private fun playVideo(uri: Uri) {
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
-
-        updateVideoNumberText()
-        updateVideoName(uri)
+        updateBottomInfo(uri)
     }
 
     /**
-     * Updates the overlay showing the current video's position in the cycle.
+     * Adjusts the screen orientation based on the video’s aspect ratio.
+     * If width > height then force landscape; otherwise, portrait.
      */
-    private fun updateVideoNumberText() {
-        tvVideoNumber.text = "#${currentIndex + 1} of ${randomOrder.size}"
+    private fun adjustOrientation(uri: Uri) {
+        try {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(this, uri)
+            val widthStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+            val heightStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            retriever.release()
+            if (widthStr != null && heightStr != null) {
+                val width = widthStr.toIntOrNull() ?: 0
+                val height = heightStr.toIntOrNull() ?: 0
+                requestedOrientation = if (width > height) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            } else {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+        } catch (e: Exception) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
     }
 
     /**
-     * Updates the overlay with the name of the currently playing video.
+     * Updates the bottom overlay with multiple lines:
+     * 1. Video index: "[#x of y]"
+     * 2. Video name (without extension)
+     * 3. App active time (HH:MM format)
+     * 4. Current date and time ("EEE, MMM d, yyyy hh:mm a")
+     * 5. "Personal Reel App by"
+     * 6. "Arnav Mukhopadhyay"
+     * 7. "EMAIL: gudduarnav@gmail.com"
      */
-    private fun updateVideoName(uri: Uri) {
-        val documentFile = DocumentFile.fromSingleUri(this, uri)
-        val videoName = documentFile?.name ?: uri.lastPathSegment ?: "Unknown"
-        tvVideoName.text = videoName
+    private fun updateBottomInfo(currentVideoUri: Uri) {
+        // Line 1: Video index.
+        val line1 = "[#${currentIndex + 1} of ${randomOrder.size}]"
+        // Line 2: Video name without extension.
+        val documentFile = DocumentFile.fromSingleUri(this, currentVideoUri)
+        val fullName = documentFile?.name ?: currentVideoUri.lastPathSegment ?: "Unknown"
+        val videoName = fullName.substringBeforeLast(".", fullName)
+        val line2 = videoName
+        // Line 3: App active time (HH:MM).
+        val activeMinutes = ((System.currentTimeMillis() - appStartTime) / 60000).toInt()
+        val hours = activeMinutes / 60
+        val minutes = activeMinutes % 60
+        val line3 = String.format("%02d:%02d", hours, minutes)
+        // Line 4: Current date and time.
+        val sdf = SimpleDateFormat("EEE, MMM d, yyyy hh:mm a", Locale.getDefault())
+        val line4 = sdf.format(Date())
+        // Lines 5-7: Fixed info.
+        val line5 = "Personal Reel App by"
+        val line6 = "Arnav Mukhopadhyay"
+        val line7 = "EMAIL: gudduarnav@gmail.com"
+        // Combine lines.
+        val infoText = listOf(line1, line2, line3, line4, line5, line6, line7).joinToString("\n")
+        tvBottomInfo.text = infoText
     }
 
     /**
-     * Advances to the next video in the cycle. If the cycle is finished, reshuffle and start a new cycle.
+     * Advances to the next video. If the cycle is finished, reshuffle.
      */
     private fun nextVideo() {
         if (randomOrder.isNotEmpty()) {
