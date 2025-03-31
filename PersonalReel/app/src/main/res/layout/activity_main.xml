@@ -6,7 +6,7 @@
     android:layout_height="match_parent">
 
     <!-- ExoPlayer's PlayerView with no controller; video is scaled in "zoom" mode
-         which fills the screen while maintaining aspect ratio (cropping if necessary) -->
+         to fill the screen while preserving aspect ratio (cropping if needed) -->
     <com.google.android.exoplayer2.ui.PlayerView
         android:id="@+id/playerView"
         android:layout_width="match_parent"
@@ -15,7 +15,7 @@
         app:resize_mode="zoom"
         android:layout_gravity="center" />
 
-    <!-- Bottom overlay for video and app info; left aligned and allows multiple lines -->
+    <!-- Bottom overlay for video and app info, left-aligned with wrapping -->
     <TextView
         android:id="@+id/tvBottomInfo"
         android:layout_width="match_parent"
@@ -24,7 +24,7 @@
         android:textColor="#FFFFFF"
         android:textSize="10sp"
         android:gravity="start"
-        android:layout_gravity="bottom|start"
+        android:layout_gravity="bottom"
         android:singleLine="false"
         android:ellipsize="none" />
 </FrameLayout>
